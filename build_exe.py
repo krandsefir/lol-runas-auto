@@ -23,8 +23,15 @@ def main() -> int:
 
     origen = raiz / "dist" / "LoLRunasAuto"
     destino = dir_instalacion()
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "LoLRunasAuto.exe"],
+        capture_output=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
     if destino.exists():
-        shutil.rmtree(destino)
+        shutil.rmtree(destino, ignore_errors=True)
+        if destino.exists():
+            shutil.rmtree(destino)
     shutil.copytree(origen, destino)
     exe = destino / "LoLRunasAuto.exe"
     crear_acceso_escritorio(exe)

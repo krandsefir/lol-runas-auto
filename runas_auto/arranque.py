@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from runas_auto.rutas import congelado, ruta_ejecutable
+from runas_auto.rutas import congelado, dir_datos, ruta_ejecutable
 
 NOMBRE_ACCESO = "LoLRunasAuto.lnk"
 MUTEX_NOMBRE = "Local\\LoLRunasAutoSingleton"
@@ -107,4 +107,26 @@ def mostrar_ventana_existente(titulo: str = "LoL Runas Auto") -> bool:
         return False
     user32.ShowWindow(hwnd, SW_RESTORE)
     user32.SetForegroundWindow(hwnd)
+    return True
+
+
+def ruta_pedido_mostrar() -> Path:
+    return dir_datos() / "mostrar.flag"
+
+
+def pedir_mostrar_ventana() -> None:
+    try:
+        ruta_pedido_mostrar().write_text("1", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def consumir_pedido_mostrar() -> bool:
+    ruta = ruta_pedido_mostrar()
+    if not ruta.exists():
+        return False
+    try:
+        ruta.unlink()
+    except OSError:
+        return True
     return True

@@ -70,6 +70,9 @@ class ClienteLCU:
     def post(self, ruta: str, cuerpo: Any = None) -> Any:
         return self._pedir("POST", ruta, cuerpo)
 
+    def patch(self, ruta: str, cuerpo: Any = None) -> Any:
+        return self._pedir("PATCH", ruta, cuerpo)
+
     def delete(self, ruta: str) -> Any:
         return self._pedir("DELETE", ruta)
 

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import sys
 import tkinter as tk
-from threading import Thread
+import traceback
+from threading import Event, Thread
 from tkinter import messagebox, ttk
 from typing import Any
 
 from runas_auto import ServicioRunas
-from runas_auto.arranque import activar_inicio_windows
+from runas_auto.arranque import activar_inicio_windows, consumir_pedido_mostrar
 from runas_auto.lcu import ClienteNoDisponible
+from runas_auto.log import registrar, registrar_excepcion
+from runas_auto.skins import ETIQUETAS_SKIN
+from runas_auto.twitch_auth import TwitchAuthError
 
 FONDO = "#0a1428"
 PANEL = "#111c33"
@@ -36,8 +40,8 @@ class VentanaRunas(tk.Tk):
         self.icono_bandeja = None
 
         self.title("LoL Runas Auto")
-        self.geometry("860x620")
-        self.minsize(760, 540)
+        self.geometry("860x760")
+        self.minsize(760, 660)
         self.configure(bg=FONDO)
         self._estilos()
 
@@ -46,6 +50,15 @@ class VentanaRunas(tk.Tk):
         self.var_pagina = tk.StringVar()
         self.var_log = tk.StringVar(value="Elige un campeón y una página de runas.")
         self.var_inicio = tk.BooleanVar(value=self.servicio.config.iniciar_con_windows())
+        self.var_skin = tk.StringVar(
+            value=ETIQUETAS_SKIN.get(self.servicio.modo_skin(), "No cambiar")
+        )
+        twitch = self.servicio.twitch()
+        self.var_twitch = tk.BooleanVar(value=bool(twitch.get("habilitado")))
+        self.var_canal = tk.StringVar(value=str(twitch.get("canal") or ""))
+        self.var_client_id = tk.StringVar(value=str(twitch.get("client_id") or ""))
+        self._oauth_cancelar: Event | None = None
+        self._dlg_twitch: tk.Toplevel | None = None
 
         self._construir()
         self.var_busqueda.trace_add("write", lambda *_: self._filtrar_campeones())
@@ -53,7 +66,9 @@ class VentanaRunas(tk.Tk):
         self._iniciar_bandeja()
         if iniciar_oculto:
             self.withdraw()
+        self.report_callback_exception = self._error_tk  # type: ignore[method-assign]
         self.after(80, self._arrancar)
+        self.after(800, self._revisar_pedido_mostrar)
 
     def _estilos(self) -> None:
         estilo = ttk.Style(self)
@@ -129,6 +144,8 @@ class VentanaRunas(tk.Tk):
 
         self._panel_asignar(cuerpo).grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         self._panel_configurados(cuerpo).grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        self._panel_twitch().pack(fill="x", padx=18, pady=(4, 0))
 
         pie = tk.Frame(self, bg=PANEL, highlightbackground=BORDE, highlightthickness=1)
         pie.pack(fill="x", padx=18, pady=(8, 16))
@@ -218,6 +235,20 @@ class VentanaRunas(tk.Tk):
             padx=10,
         ).pack(side="left", padx=(8, 0))
 
+        tk.Label(marco, text="Skin en champ select", bg=PANEL, fg=MUTED, font=FUENTE_CHICA).pack(
+            anchor="w", padx=12, pady=(10, 2)
+        )
+        self.combo_skin = ttk.Combobox(
+            marco,
+            textvariable=self.var_skin,
+            state="readonly",
+            font=FUENTE,
+            style="Combo.TCombobox",
+            values=tuple(ETIQUETAS_SKIN.values()),
+        )
+        self.combo_skin.pack(fill="x", padx=12, ipady=2)
+        self.combo_skin.bind("<<ComboboxSelected>>", lambda _e: self._guardar_modo_skin())
+
         tk.Button(
             marco,
             text="Guardar asignación",
@@ -283,6 +314,124 @@ class VentanaRunas(tk.Tk):
         ).pack(fill="x", padx=12, pady=14, ipady=6)
         return marco
 
+    def _panel_twitch(self) -> tk.Frame:
+        marco = tk.Frame(self, bg=PANEL, highlightbackground=BORDE, highlightthickness=1)
+        tk.Label(
+            marco,
+            text="Chat de Twitch",
+            bg=PANEL,
+            fg=BORDE,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        tk.Label(
+            marco,
+            text=(
+                "El chat pide una skin que ya tengas. Ejemplos: !skin  ·  !skin aleatoria  ·  "
+                "!skin siguiente  ·  !skin PROJECT  ·  !skin 3. "
+                "Inicia sesión para que el bot responda quién la eligió."
+            ),
+            bg=PANEL,
+            fg=MUTED,
+            font=FUENTE_CHICA,
+            wraplength=800,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+        fila = tk.Frame(marco, bg=PANEL)
+        fila.pack(fill="x", padx=12, pady=(0, 12))
+        tk.Checkbutton(
+            fila,
+            text="Escuchar chat",
+            variable=self.var_twitch,
+            command=self._guardar_twitch,
+            bg=PANEL,
+            fg=TEXTO,
+            selectcolor="#0a1428",
+            activebackground=PANEL,
+            activeforeground=TEXTO,
+            font=FUENTE_CHICA,
+        ).pack(side="left")
+        tk.Label(fila, text="Canal", bg=PANEL, fg=MUTED, font=FUENTE_CHICA).pack(
+            side="left", padx=(16, 6)
+        )
+        entrada = tk.Entry(
+            fila,
+            textvariable=self.var_canal,
+            bg="#0a1428",
+            fg=TEXTO,
+            insertbackground=TEXTO,
+            relief="flat",
+            font=FUENTE,
+            width=22,
+        )
+        entrada.pack(side="left", ipady=4)
+        entrada.bind("<Return>", lambda _e: self._guardar_twitch())
+        tk.Button(
+            fila,
+            text="Conectar",
+            command=self._guardar_twitch,
+            bg="#1a2744",
+            fg=TEXTO,
+            activebackground=SELECCION,
+            activeforeground=TEXTO,
+            relief="flat",
+            font=FUENTE_CHICA,
+            cursor="hand2",
+            padx=10,
+        ).pack(side="left", padx=(8, 0))
+        fila2 = tk.Frame(marco, bg=PANEL)
+        fila2.pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(fila2, text="Client ID", bg=PANEL, fg=MUTED, font=FUENTE_CHICA).pack(
+            side="left"
+        )
+        tk.Entry(
+            fila2,
+            textvariable=self.var_client_id,
+            bg="#0a1428",
+            fg=TEXTO,
+            insertbackground=TEXTO,
+            relief="flat",
+            font=FUENTE_CHICA,
+            width=28,
+        ).pack(side="left", padx=(6, 8), ipady=3)
+        self.btn_twitch_sesion = tk.Button(
+            fila2,
+            text="Iniciar sesión",
+            command=self._iniciar_sesion_twitch,
+            bg=BORDE,
+            fg="#0a1428",
+            activebackground="#e0c080",
+            activeforeground="#0a1428",
+            relief="flat",
+            font=FUENTE_CHICA,
+            cursor="hand2",
+            padx=10,
+        )
+        self.btn_twitch_sesion.pack(side="left")
+        tk.Button(
+            fila2,
+            text="Cerrar sesión",
+            command=self._cerrar_sesion_twitch,
+            bg="#1a2744",
+            fg=TEXTO,
+            activebackground=SELECCION,
+            activeforeground=TEXTO,
+            relief="flat",
+            font=FUENTE_CHICA,
+            cursor="hand2",
+            padx=10,
+        ).pack(side="left", padx=(8, 0))
+        self.lbl_twitch_cuenta = tk.Label(
+            marco,
+            text="",
+            bg=PANEL,
+            fg=MUTED,
+            font=FUENTE_CHICA,
+            anchor="w",
+        )
+        self.lbl_twitch_cuenta.pack(fill="x", padx=12, pady=(0, 10))
+        self._pintar_cuenta_twitch()
+        return marco
+
     def _arrancar(self) -> None:
         if self.servicio.config.iniciar_con_windows():
             activar_inicio_windows(True)
@@ -344,6 +493,25 @@ class VentanaRunas(tk.Tk):
             )
             self._log(texto)
             self._notificar("Runas aplicadas", texto)
+        elif tipo == "skin":
+            if evento.get("usuario"):
+                texto = (
+                    f"{evento.get('usuario')} eligió '{evento.get('skin_nombre')}' "
+                    f"para {evento.get('campeon_nombre')}."
+                )
+            else:
+                texto = (
+                    f"Skin '{evento.get('skin_nombre')}' "
+                    f"para {evento.get('campeon_nombre')}."
+                )
+            self._log(texto)
+            self._notificar("Skin aplicada", texto)
+        elif tipo == "twitch":
+            mensaje = str(evento.get("mensaje") or "")
+            if evento.get("conectado"):
+                self._log(mensaje or "Chat de Twitch conectado.")
+            else:
+                self._log(mensaje or "Chat de Twitch desconectado.", error=True)
         elif tipo == "sin_configurar":
             self._log(
                 f"{evento.get('campeon_nombre')} no tiene página asignada.",
@@ -358,11 +526,16 @@ class VentanaRunas(tk.Tk):
             )
             if evento.get("conectado") and self.winfo_viewable():
                 self._refrescar_paginas()
+        elif tipo == "reporte":
+            texto = str(evento.get("mensaje") or "Reporte de la partida enviado.")
+            self._log(texto)
+            self._notificar("Reporte enviado", texto)
         elif tipo == "fase":
             if self.winfo_viewable():
                 self._log(f"Fase: {evento.get('fase')}")
         elif tipo == "error":
             self._log(str(evento.get("mensaje") or "Error"), error=True)
+        self._pintar_cuenta_twitch()
         self._actualizar_estado()
 
     def _actualizar_estado(self) -> None:
@@ -376,7 +549,16 @@ class VentanaRunas(tk.Tk):
             return
         if estado.get("conectado"):
             nombre = estado.get("invocador") or "invocador"
-            self.var_estado.set(f"Conectado como {nombre}  ·  vigilando")
+            extra = ""
+            if estado.get("twitch_habilitado"):
+                canal = estado.get("twitch_canal") or ""
+                if estado.get("twitch_conectado"):
+                    extra = f"  ·  Twitch #{canal}"
+                    if estado.get("twitch_puede_hablar"):
+                        extra += " (responde)"
+                else:
+                    extra = "  ·  Twitch…"
+            self.var_estado.set(f"Conectado como {nombre}  ·  vigilando{extra}")
             self.lbl_estado.configure(fg=OK)
         else:
             self.var_estado.set("Cliente de LoL no detectado")
@@ -546,6 +728,165 @@ class VentanaRunas(tk.Tk):
     def _toggle_inicio(self) -> None:
         self._aplicar_inicio(bool(self.var_inicio.get()))
 
+    def _guardar_modo_skin(self) -> None:
+        etiqueta = self.var_skin.get()
+        modo = next((clave for clave, valor in ETIQUETAS_SKIN.items() if valor == etiqueta), "ninguna")
+        self.servicio.set_modo_skin(modo)
+        if modo == "ninguna":
+            self._log("No cambiaré la skin en champ select.")
+        elif modo == "aleatoria":
+            self._log("En champ select pondré una skin aleatoria de las que tienes.")
+        else:
+            self._log("En champ select rotaré a la siguiente skin que tengas.")
+
+    def _guardar_twitch(self) -> None:
+        canal = self.var_canal.get().strip()
+        activo = bool(self.var_twitch.get())
+        client_id = self.var_client_id.get().strip()
+        if client_id:
+            self.servicio.set_twitch_client_id(client_id)
+        if activo and not canal:
+            self.var_twitch.set(False)
+            self._log("Escribe tu canal de Twitch para que el chat elija skins.", error=True)
+            return
+        try:
+            self.servicio.set_twitch(activo, canal)
+        except Exception as exc:  # noqa: BLE001
+            self._log(str(exc), error=True)
+            return
+        if activo:
+            self._log(f"El chat de #{canal} puede pedir skins con !skin.")
+        else:
+            self._log("Chat de Twitch desconectado.")
+        self._pintar_cuenta_twitch()
+
+    def _pintar_cuenta_twitch(self) -> None:
+        if not hasattr(self, "lbl_twitch_cuenta"):
+            return
+        datos = self.servicio.twitch()
+        if not self.var_client_id.get().strip() and datos.get("client_id"):
+            self.var_client_id.set(str(datos.get("client_id") or ""))
+        if datos.get("canal") and not self.var_canal.get().strip():
+            self.var_canal.set(str(datos.get("canal") or ""))
+        if datos.get("puede_hablar"):
+            self.lbl_twitch_cuenta.configure(
+                text=f"Responde en el chat como {datos.get('login')} (quién eligió la skin).",
+                fg=OK,
+            )
+            self.btn_twitch_sesion.configure(text="Volver a iniciar sesión")
+        else:
+            self.lbl_twitch_cuenta.configure(
+                text="Sin sesión: el chat se oye, pero no se responde. Crea una app pública en dev.twitch.tv y pega el Client ID.",
+                fg=MUTED,
+            )
+            self.btn_twitch_sesion.configure(text="Iniciar sesión")
+
+    def _iniciar_sesion_twitch(self) -> None:
+        client_id = self.var_client_id.get().strip()
+        if not client_id:
+            messagebox.showinfo(
+                "Twitch",
+                "Crea una aplicación en https://dev.twitch.tv/console/apps "
+                "(tipo Public, OAuth Redirect http://localhost) y pega aquí el Client ID.",
+            )
+            return
+        self.servicio.set_twitch_client_id(client_id)
+        if self._dlg_twitch is not None and self._dlg_twitch.winfo_exists():
+            self._dlg_twitch.lift()
+            return
+        self._oauth_cancelar = Event()
+        dlg = tk.Toplevel(self)
+        dlg.title("Iniciar sesión en Twitch")
+        dlg.configure(bg=PANEL)
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        self._dlg_twitch = dlg
+        tk.Label(
+            dlg,
+            text="Abre el navegador, inicia sesión en Twitch y autoriza la app.",
+            bg=PANEL,
+            fg=TEXTO,
+            font=FUENTE,
+            wraplength=420,
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+        var_codigo = tk.StringVar(value="Pidiendo código…")
+        tk.Label(
+            dlg,
+            textvariable=var_codigo,
+            bg=PANEL,
+            fg=BORDE,
+            font=("Segoe UI", 18, "bold"),
+        ).pack(anchor="w", padx=16, pady=(0, 12))
+        tk.Button(
+            dlg,
+            text="Cancelar",
+            command=lambda: self._cancelar_login_twitch(),
+            bg="#1a2744",
+            fg=TEXTO,
+            relief="flat",
+            font=FUENTE_CHICA,
+            cursor="hand2",
+            padx=10,
+        ).pack(anchor="e", padx=16, pady=(0, 16))
+        dlg.protocol("WM_DELETE_WINDOW", self._cancelar_login_twitch)
+
+        def al_codigo(datos: dict[str, Any]) -> None:
+            codigo = str(datos.get("user_code") or "")
+            self.after(0, lambda: var_codigo.set(codigo or "Autoriza en el navegador…"))
+
+        def trabajo() -> None:
+            try:
+                self.servicio.iniciar_sesion_twitch(
+                    client_id,
+                    al_codigo=al_codigo,
+                    cancelar=self._oauth_cancelar,
+                )
+            except TwitchAuthError as exc:
+                texto = str(exc)
+                error = "cancelado" not in texto.lower()
+                self.after(0, lambda t=texto, e=error: self._login_twitch_fin(t, error=e))
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda: self._login_twitch_fin(str(exc), error=True))
+            else:
+                self.after(
+                    0,
+                    lambda: self._login_twitch_fin(
+                        "Listo. Cuando alguien ponga !skin, el chat verá quién eligió y que ya está para esta partida."
+                    ),
+                )
+
+        Thread(target=trabajo, daemon=True, name="twitch-oauth").start()
+
+    def _cancelar_login_twitch(self) -> None:
+        self.servicio.cancelar_login_twitch()
+        if self._oauth_cancelar is not None:
+            self._oauth_cancelar.set()
+        self._cerrar_dlg_twitch()
+
+    def _cerrar_dlg_twitch(self) -> None:
+        dlg = self._dlg_twitch
+        self._dlg_twitch = None
+        if dlg is not None:
+            try:
+                dlg.destroy()
+            except tk.TclError:
+                pass
+
+    def _login_twitch_fin(self, mensaje: str, error: bool = False) -> None:
+        self._cerrar_dlg_twitch()
+        datos = self.servicio.twitch()
+        if datos.get("canal"):
+            self.var_canal.set(str(datos["canal"]))
+        self.var_twitch.set(bool(datos.get("habilitado")))
+        self._pintar_cuenta_twitch()
+        self._log(mensaje, error=error)
+
+    def _cerrar_sesion_twitch(self) -> None:
+        self.servicio.cerrar_sesion_twitch()
+        self._pintar_cuenta_twitch()
+        self._log("Cerré la sesión de Twitch. El chat ya no responderá.")
+
     def _aplicar_inicio(self, activo: bool) -> None:
         self.servicio.config.set_iniciar_con_windows(activo)
         activar_inicio_windows(activo)
@@ -556,26 +897,45 @@ class VentanaRunas(tk.Tk):
         )
 
     def _iniciar_bandeja(self) -> None:
-        import pystray
-        from runas_auto.icono import imagen_bandeja
+        try:
+            import pystray
+            from runas_auto.icono import imagen_bandeja
 
-        menu = pystray.Menu(
-            pystray.MenuItem("Configurar", self._desde_bandeja_mostrar, default=True),
-            pystray.MenuItem(
-                "Iniciar con Windows",
-                self._desde_bandeja_inicio,
-                checked=lambda _: self.servicio.config.iniciar_con_windows(),
-            ),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Salir", self._desde_bandeja_salir),
-        )
-        self.icono_bandeja = pystray.Icon(
-            "LoLRunasAuto",
-            imagen_bandeja(),
-            "LoL Runas Auto",
-            menu,
-        )
-        Thread(target=self.icono_bandeja.run, daemon=True, name="bandeja").start()
+            menu = pystray.Menu(
+                pystray.MenuItem("Configurar", self._desde_bandeja_mostrar, default=True),
+                pystray.MenuItem(
+                    "Iniciar con Windows",
+                    self._desde_bandeja_inicio,
+                    checked=lambda _: self.servicio.config.iniciar_con_windows(),
+                ),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Salir", self._desde_bandeja_salir),
+            )
+            self.icono_bandeja = pystray.Icon(
+                "LoLRunasAuto",
+                imagen_bandeja(),
+                "LoL Runas Auto",
+                menu,
+            )
+            Thread(target=self.icono_bandeja.run, daemon=True, name="bandeja").start()
+        except Exception as exc:  # noqa: BLE001
+            registrar_excepcion(exc)
+            self.icono_bandeja = None
+            self._log(f"No pude crear el icono de bandeja: {exc}", error=True)
+
+    def _error_tk(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        detalle = "".join(traceback.format_exception(exc_type, exc, tb))
+        registrar(detalle)
+        try:
+            messagebox.showerror("LoL Runas Auto", detalle[-1500:])
+        except Exception:
+            pass
+
+    def _revisar_pedido_mostrar(self) -> None:
+        if consumir_pedido_mostrar():
+            self.mostrar()
+        if self.winfo_exists():
+            self.after(800, self._revisar_pedido_mostrar)
 
     def _desde_bandeja_mostrar(self, *_args) -> None:
         self.after(0, self.mostrar)

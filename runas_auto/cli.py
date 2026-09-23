@@ -18,11 +18,31 @@ def _imprimir_evento(evento: dict) -> None:
             f"para {evento.get('campeon_nombre')}."
         )
         return
+    if tipo == "skin":
+        quien = evento.get("usuario")
+        if quien:
+            print(
+                f"{quien} eligió '{evento.get('skin_nombre')}' "
+                f"para {evento.get('campeon_nombre')}."
+            )
+        else:
+            print(
+                f"Skin '{evento.get('skin_nombre')}' para {evento.get('campeon_nombre')}."
+            )
+        return
+    if tipo == "twitch":
+        estado = "conectado" if evento.get("conectado") else "desconectado"
+        extra = evento.get("mensaje")
+        print(f"Twitch {estado}" + (f": {extra}" if extra else "."))
+        return
     if tipo == "sin_configurar":
         print(f"{evento.get('campeon_nombre')} no tiene página asignada.")
         return
     if tipo == "cliente":
         print("Cliente conectado." if evento.get("conectado") else "Cliente desconectado.")
+        return
+    if tipo == "reporte":
+        print(evento.get("mensaje") or "Reporte de la partida enviado.")
         return
     if tipo == "fase":
         print(f"Fase: {evento.get('fase')}")
@@ -44,6 +64,17 @@ def main() -> int:
     print(f"Campeones configurados: {estado['configurados']}")
     for item in servicio.configurados():
         print(f"  - {item.get('campeon_nombre')}: {item.get('pagina_nombre')}")
+
+    twitch = servicio.twitch()
+    if twitch.get("habilitado") and twitch.get("canal"):
+        extra = f"Twitch: escuchando #{twitch['canal']} ({twitch.get('comando') or '!skin'})"
+        if twitch.get("puede_hablar"):
+            extra += f", responde como {twitch.get('login')}."
+        else:
+            extra += ". Sin sesión: no responde en el chat."
+        print(extra)
+    else:
+        print("Twitch: desactivado. Actívalo en la ventana con tu canal.")
 
     try:
         servicio.iniciar(_imprimir_evento)

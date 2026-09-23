@@ -2,23 +2,36 @@ import sys
 import traceback
 
 
-def _registrar_error(exc: BaseException) -> None:
+def _registrar_error(exc: BaseException | None = None) -> str:
     try:
-        from runas_auto.rutas import dir_datos
+        from runas_auto.log import registrar_excepcion
 
-        ruta = dir_datos() / "error.log"
-        ruta.write_text(
-            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-            encoding="utf-8",
-        )
+        return registrar_excepcion(exc)
+    except Exception:
+        return traceback.format_exc()
+
+
+def _avisar(texto: str) -> None:
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, texto[:1000], "LoL Runas Auto", 0x10)
     except Exception:
         pass
 
 
 def lanzar() -> int:
-    from runas_auto.arranque import mostrar_ventana_existente, reclamar_instancia_unica
+    from runas_auto.arranque import (
+        mostrar_ventana_existente,
+        pedir_mostrar_ventana,
+        reclamar_instancia_unica,
+    )
+    from runas_auto.log import registrar
 
+    registrar("Arranque")
     if not reclamar_instancia_unica():
+        registrar("Ya había una instancia; pido mostrar la ventana.")
+        pedir_mostrar_ventana()
         mostrar_ventana_existente()
         return 0
 
@@ -38,5 +51,6 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as exc:
-        _registrar_error(exc)
+        detalle = _registrar_error(exc)
+        _avisar(f"Error al iniciar:\n{detalle}")
         raise

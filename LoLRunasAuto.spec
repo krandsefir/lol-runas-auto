@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [("assets/icon.ico", "assets")]
 binaries = []
-hiddenimports = ["pystray._win32", "pystray._base", "PIL._tkinter_finder"]
+hiddenimports = ["pystray._win32", "pystray._base", "PIL._tkinter_finder", "runas_auto.skins", "runas_auto.twitch", "runas_auto.twitch_auth", "ui.ventana"]
 
 tmp_ret = collect_all("pystray")
 datas += tmp_ret[0]
