@@ -11,3 +11,4 @@ data/campeones_cache.json
 build/
 dist/
 *.zip
+.stitch/

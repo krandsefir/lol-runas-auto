@@ -25,7 +25,7 @@ No usa la API pública de Riot (historial, ranked). Habla con el **cliente local
 2. Abre LoL Runas Auto (atajo del escritorio o el `.exe`).
 3. Clic en el icono de la bandeja → **Configurar** (o abre el atajo, que muestra la ventana).
 4. A la izquierda, **busca el campeón**, selecciónalo, elige la **página de runas** y pulsa **Guardar asignación**.
-5. A la derecha ves **lo ya configurado**. Selecciona una fila y **Quitar seleccionado** para borrarla.
+5. En el centro ves **las asignaciones activas**. Elige una y **Quitar seleccionado**, o la ✕ de esa fila, para borrarla.
 6. En **Skin en champ select** elige *No cambiar*, *Aleatoria* o *Siguiente* (solo skins que ya tienes).
 7. Si streameas: marca **Escuchar chat**, escribe tu canal de Twitch y pulsa **Conectar**.
 8. Marca **Iniciar con Windows** si quieres que arranque sola.
