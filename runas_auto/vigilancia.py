@@ -5,6 +5,13 @@ from collections.abc import Callable
 from threading import Event, Lock, Thread
 from typing import Any
 
+from runas_auto.amistades import (
+    MAX_BLOQUEOS,
+    bloquear_solicitud,
+    nombre_solicitud,
+    puuids_recientes,
+    solicitudes_entrantes,
+)
 from runas_auto.campeones import CatalogoCampeones
 from runas_auto.config import Configuracion
 from runas_auto.lcu import ClienteLCU, ClienteNoDisponible
@@ -44,6 +51,9 @@ class Vigilante:
         self._lock_chat = Lock()
         self._reportes_enviados: set[str] = set()
         self._reportes_fallidos: set[str] = set()
+        self._aviso_tope_bloqueos = False
+        self._recientes_cache: set[str] | None = None
+        self._recientes_en = 0.0
 
     @property
     def activo(self) -> bool:
@@ -120,6 +130,9 @@ class Vigilante:
 
         if fase_texto in FASES_REPORTE:
             self._enviar_reportes(al_evento)
+
+        if self.config.bloquear_solicitudes():
+            self._revisar_solicitudes(fase_texto, al_evento)
 
         if fase_texto != "ChampSelect":
             return
@@ -333,6 +346,69 @@ class Vigilante:
                 "Skin seleccionada para esta partida."
             )
         self._avisar(al_evento, evento)
+
+    def _revisar_solicitudes(self, fase: str, al_evento: EventoCallback | None) -> None:
+        ya = self.config.bloqueos_solicitudes()
+        if len(ya) >= MAX_BLOQUEOS:
+            if not self._aviso_tope_bloqueos:
+                self._aviso_tope_bloqueos = True
+                self._avisar(
+                    al_evento,
+                    {
+                        "tipo": "bloqueo",
+                        "mensaje": f"Tope de {MAX_BLOQUEOS} bloqueos. No bloqueo más solicitudes.",
+                    },
+                )
+            return
+        self._aviso_tope_bloqueos = False
+        try:
+            pendientes = solicitudes_entrantes(self.cliente)
+        except ClienteNoDisponible:
+            return
+        if not pendientes:
+            return
+        en_espera = fase in {"Lobby", "Matchmaking", "ReadyCheck", "ChampSelect", "GameStart"}
+        ahora = time.monotonic()
+        if (
+            self._recientes_cache is None
+            or en_espera
+            or ahora - self._recientes_en > 20
+        ):
+            recientes = puuids_recientes(self.cliente, en_espera)
+            if recientes is None:
+                return
+            self._recientes_cache = recientes
+            self._recientes_en = ahora
+        recientes = self._recientes_cache
+        for solicitud in pendientes:
+            if len(self.config.bloqueos_solicitudes()) >= MAX_BLOQUEOS:
+                break
+            puuid = str(solicitud.get("puuid") or "")
+            if not puuid or puuid in recientes or puuid in self.config.bloqueos_solicitudes():
+                continue
+            nombre = nombre_solicitud(solicitud)
+            try:
+                bloquear_solicitud(self.cliente, solicitud)
+            except ClienteNoDisponible:
+                self._avisar(
+                    al_evento,
+                    {
+                        "tipo": "error",
+                        "mensaje": f"No pude bloquear la solicitud de {nombre}.",
+                    },
+                )
+                continue
+            total = self.config.anotar_bloqueo_solicitud(puuid)
+            self._avisar(
+                al_evento,
+                {
+                    "tipo": "bloqueo",
+                    "mensaje": (
+                        f"Bloqueé a {nombre}: no jugó tus últimas {2} partidas "
+                        f"({total}/{MAX_BLOQUEOS})."
+                    ),
+                },
+            )
 
     def _enviar_reportes(self, al_evento: EventoCallback | None) -> None:
         try:

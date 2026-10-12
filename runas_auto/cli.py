@@ -41,6 +41,9 @@ def _imprimir_evento(evento: dict) -> None:
     if tipo == "cliente":
         print("Cliente conectado." if evento.get("conectado") else "Cliente desconectado.")
         return
+    if tipo == "bloqueo":
+        print(evento.get("mensaje") or "Solicitud bloqueada.")
+        return
     if tipo == "reporte":
         print(evento.get("mensaje") or "Reporte de la partida enviado.")
         return

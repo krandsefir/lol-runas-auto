@@ -28,6 +28,8 @@ def _vacio() -> dict[str, Any]:
         "twitch_refresh_token": "",
         "twitch_token_expira": 0.0,
         "twitch_login": "",
+        "bloquear_solicitudes": False,
+        "bloqueos_solicitudes": [],
         "mapeos": [],
     }
 
@@ -67,6 +69,9 @@ class Configuracion:
         except (TypeError, ValueError):
             base["twitch_token_expira"] = 0.0
         base["twitch_habilitado"] = bool(base.get("twitch_habilitado"))
+        base["bloquear_solicitudes"] = bool(base.get("bloquear_solicitudes"))
+        if not isinstance(base.get("bloqueos_solicitudes"), list):
+            base["bloqueos_solicitudes"] = []
         return base
 
     def guardar(self) -> None:
@@ -153,6 +158,31 @@ class Configuracion:
             ultimas[clave] = int(skin_id)
             self.datos["skins_ultima"] = ultimas
         self.guardar()
+
+    def bloquear_solicitudes(self) -> bool:
+        return bool(self.datos.get("bloquear_solicitudes"))
+
+    def set_bloquear_solicitudes(self, activo: bool) -> None:
+        with self._lock:
+            self.datos["bloquear_solicitudes"] = bool(activo)
+            if not activo:
+                self.datos["bloqueos_solicitudes"] = []
+        self.guardar()
+
+    def bloqueos_solicitudes(self) -> list[str]:
+        with self._lock:
+            return [str(item) for item in self.datos.get("bloqueos_solicitudes") or []]
+
+    def anotar_bloqueo_solicitud(self, puuid: str) -> int:
+        puuid = (puuid or "").strip()
+        with self._lock:
+            actuales = [str(item) for item in self.datos.get("bloqueos_solicitudes") or []]
+            if puuid and puuid not in actuales:
+                actuales.append(puuid)
+            self.datos["bloqueos_solicitudes"] = actuales
+            total = len(actuales)
+        self.guardar()
+        return total
 
     def twitch(self) -> dict[str, Any]:
         with self._lock:
